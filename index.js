@@ -88,12 +88,38 @@ app.post("/api/create-contract", async (req, res) => {
             name: data.name,
             role: "Première partie",
             fields: [
-              {
-                name: "Nom du contact",
-                default_value: data.name,
-                readonly: true
-              }
-            ]
+  { name: "Nom du contact", default_value: data.name, readonly: true },
+
+  { name: "client_company", default_value: data.company || "-", readonly: true },
+  { name: "client_legal_form", default_value: data.legalForm || "-", readonly: true },
+  { name: "client_registration", default_value: data.registration || "-", readonly: true },
+  { name: "client_address", default_value: data.address || "-", readonly: true },
+  { name: "client_representative", default_value: data.representative || data.name || "-", readonly: true },
+
+  { name: "track_title", default_value: data.track_title || "-", readonly: true },
+  { name: "track_composers", default_value: data.composers || "CB Production", readonly: true },
+  { name: "track_authors", default_value: data.authors || "-", readonly: true },
+  { name: "track_duration", default_value: data.trackDuration || "-", readonly: true },
+  { name: "track_bpm", default_value: data.bpm || "-", readonly: true },
+  { name: "track_isrc", default_value: data.isrc || "-", readonly: true },
+  { name: "track_iswc", default_value: data.iswc || "-", readonly: true },
+  { name: "track_version", default_value: data.section || "Titre complet", readonly: true },
+
+  { name: "project_name", default_value: data.project || "-", readonly: true },
+  { name: "project_type", default_value: data.usage || "-", readonly: true },
+  { name: "final_client", default_value: data.finalClient || "-", readonly: true },
+  { name: "production_company", default_value: data.productionCompany || "-", readonly: true },
+  { name: "project_duration", default_value: data.projectDuration || "-", readonly: true },
+  { name: "release_date", default_value: data.releaseDate || "-", readonly: true },
+  { name: "territory", default_value: data.territory || "Monde", readonly: true },
+  { name: "supports", default_value: data.supports || "-", readonly: true },
+  { name: "media_budget", default_value: data.mediaBudget || "-", readonly: true },
+
+  { name: "license_type", default_value: licenseType, readonly: true },
+  { name: "license_duration", default_value: data.licenseDuration || "Illimitée sauf mention contraire", readonly: true },
+  { name: "files_provided", default_value: data.filesProvided || "Master WAV/MP3", readonly: true },
+  { name: "price", default_value: priceLabel(data), readonly: true }
+]
           }
         ]
       },

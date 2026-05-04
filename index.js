@@ -88,7 +88,7 @@ app.post("/api/create-contract", async (req, res) => {
             name: data.name,
             role: "Première partie",
             fields: [
-  { name: "Nom du contact", default_value: data.name, readonly: true },
+  { name: "client_name", default_value: data.name, readonly: true },
 
   { name: "client_company", default_value: data.company || "-", readonly: true },
   { name: "client_legal_form", default_value: data.legalForm || "-", readonly: true },

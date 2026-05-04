@@ -8,9 +8,7 @@ const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PORT = process.env.PORT || 3001;
-
-const DOCUSEAL_BASE_URL =
-  process.env.DOCUSEAL_BASE_URL || "https://api.docuseal.com";
+const DOCUSEAL_BASE_URL = process.env.DOCUSEAL_BASE_URL || "http://104.168.10.250:3000";
 
 const CONTRACT_PRICES = {
   sync_nonexclusive: 4900,
@@ -18,11 +16,7 @@ const CONTRACT_PRICES = {
   artist_exclusive: 14900
 };
 
-/*
-  IMPORTANT :
-  Le webhook Stripe doit rester AVANT express.json(),
-  sinon Stripe signature verification casse.
-*/
+/* Stripe webhook AVANT express.json() */
 app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
   const sig = req.headers["stripe-signature"];
 
@@ -46,11 +40,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
     console.log("Client:", session.customer_details?.email || session.customer_email);
     console.log("Track:", session.metadata?.track_title);
     console.log("License:", session.metadata?.license_type);
-
-    /*
-      Étape suivante :
-      ici on enverra automatiquement les fichiers.
-    */
   }
 
   res.json({ received: true });
@@ -63,24 +52,12 @@ app.get("/", (req, res) => {
   res.send("CB Contracts Worker is running.");
 });
 
-app.listen(PORT, () => {
-  console.log("CB Contracts Worker lancé sur http://localhost.");
-});
-
-
-/*
-  1. Le site appelle cette route.
-  2. On crée une soumission DocuSeal.
-  3. On renvoie le lien de signature au client.
-*/
 app.post("/api/create-contract", async (req, res) => {
   try {
     const data = req.body;
 
     if (!data.name || !data.email || !data.track_title || !data.profile) {
-      return res.status(400).json({
-        error: "Missing required fields"
-      });
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
     const licenseType = getLicenseType(data);
@@ -93,26 +70,29 @@ app.post("/api/create-contract", async (req, res) => {
       templateId
     });
 
+    if (!templateId || Number.isNaN(Number(templateId))) {
+      return res.status(500).json({
+        error: "Invalid DocuSeal template ID",
+        templateId
+      });
+    }
+
     const response = await axios.post(
       `${DOCUSEAL_BASE_URL}/api/submissions`,
       {
-        template_id: templateid,
+        template_id: parseInt(templateId, 10),
         send_email: false,
         submitters: [
           {
             email: data.email,
             name: data.name,
-            role: "Licencié",
+            role: "Première partie",
             fields: [
-              { name: "client_name", default_value: data.name, readonly: true },
-              { name: "client_email", default_value: data.email, readonly: true },
-              { name: "client_company", default_value: data.company || "-", readonly: true },
-              { name: "project_name", default_value: data.project || "-", readonly: true },
-              { name: "usage", default_value: data.usage || "-", readonly: true },
-              { name: "track_title", default_value: data.track_title, readonly: true },
-              { name: "selected_section", default_value: data.section || "Titre complet", readonly: true },
-              { name: "license_type", default_value: licenseType, readonly: true },
-              { name: "price", default_value: priceLabel(data), readonly: true }
+              {
+                name: "Nom du contact",
+                default_value: data.name,
+                readonly: true
+              }
             ]
           }
         ]
@@ -125,6 +105,9 @@ app.post("/api/create-contract", async (req, res) => {
       }
     );
 
+    console.log("FINAL TEMPLATE SENT =", Number(templateId));
+    console.log("✅ DocuSeal response:", response.data);
+
     const submitter = response.data.submitters?.[0];
 
     const signingUrl =
@@ -134,9 +117,9 @@ app.post("/api/create-contract", async (req, res) => {
       response.data.url;
 
     if (!signingUrl) {
-      console.log("DocuSeal response:", response.data);
       return res.status(500).json({
-        error: "No signing URL returned by DocuSeal"
+        error: "No signing URL returned by DocuSeal",
+        response: response.data
       });
     }
 
@@ -154,10 +137,6 @@ app.post("/api/create-contract", async (req, res) => {
   }
 });
 
-/*
-  Après signature, on créera le paiement Stripe.
-  Pour l’instant, cette route sert aussi à tester.
-*/
 app.post("/api/create-payment", async (req, res) => {
   try {
     const data = req.body;

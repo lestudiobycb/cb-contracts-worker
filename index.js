@@ -108,13 +108,15 @@ app.post("/api/create-contract", async (req, res) => {
     console.log("FINAL TEMPLATE SENT =", Number(templateId));
     console.log("✅ DocuSeal response:", response.data);
 
-    const submitter = response.data.submitters?.[0];
+    const submitter = Array.isArray(response.data)
+  ? response.data[0]
+  : response.data.submitters?.[0];
 
-    const signingUrl =
-      submitter?.url ||
-      submitter?.embed_src ||
-      submitter?.link ||
-      response.data.url;
+const signingUrl =
+  submitter?.url ||
+  submitter?.embed_src ||
+  submitter?.link ||
+  response.data?.url;
 
     if (!signingUrl) {
       return res.status(500).json({

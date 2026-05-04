@@ -96,7 +96,7 @@ app.post("/api/create-contract", async (req, res) => {
     const response = await axios.post(
       `${DOCUSEAL_BASE_URL}/api/submissions`,
       {
-        template_id: template_id,
+        template_id: templateid,
         send_email: false,
         submitters: [
           {

@@ -13,7 +13,7 @@ const DOCUSEAL_BASE_URL = process.env.DOCUSEAL_BASE_URL || "http://104.168.10.25
 const CONTRACT_PRICES = {
   sync_nonexclusive: 4900,   // 49 €
   sync_exclusive: 29900,     // 299 €
-  artist_exclusive: 14900    // 149 €
+  artist_exclusive: 54900    // 549 €
 };
 
 const ADDON_PRICES = {
@@ -103,13 +103,18 @@ app.post("/api/create-contract", async (req, res) => {
         template_id: parseInt(templateId, 10),
         send_email: false,
         submitters: [
-          {
-            email: data.email,
-            name: data.name,
-            role: "Première partie",
-            fields
-          }
-        ]
+  {
+    email: data.email,
+    name: data.name,
+    role: "Licencié",
+    fields
+  },
+  {
+    email: process.env.CB_EMAIL,
+    name: "CB Production",
+    role: "Concédant"
+  }
+]
       },
       {
         headers: {
@@ -331,6 +336,10 @@ function syncFields(data) {
     { name: "production_company", default_value: data.productionCompany || "-", readonly: true },
     { name: "project_duration", default_value: data.projectDuration || "-", readonly: true },
     { name: "release_date", default_value: data.releaseDate || "-", readonly: true },
+    { name: "license_duration", default_value: data.duration || "1 an", readonly: true },
+    { name: "license_mode", default_value: data.licenseMode === "exclusive"
+        ? "Exclusive"
+        : "Non-exclusive", readonly: true },
     { name: "territory", default_value: data.territory || "-", readonly: true },
     { name: "supports", default_value: data.supports || "-", readonly: true },
     { name: "media_budget", default_value: data.mediaBudget || "-", readonly: true },

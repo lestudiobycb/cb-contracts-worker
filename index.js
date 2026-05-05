@@ -11,9 +11,26 @@ const PORT = process.env.PORT || 3001;
 const DOCUSEAL_BASE_URL = process.env.DOCUSEAL_BASE_URL || "http://104.168.10.250:3000";
 
 const CONTRACT_PRICES = {
-  sync_nonexclusive: 4900,
-  sync_exclusive: 29900,
-  artist_exclusive: 14900
+  sync_nonexclusive: 4900,   // 49 €
+  sync_exclusive: 29900,     // 299 €
+  artist_exclusive: 14900    // 149 €
+};
+
+const ADDON_PRICES = {
+  addon_copyright_transfer: 300000, // 3000 €
+
+  addon_artist_stems: 3000,             // 30 €
+  addon_artist_all_tracks: 5000,        // 50 €
+  addon_artist_protools_session: 25000, // 250 €
+  addon_artist_master: 4000,            // 40 €
+  addon_artist_mix: 10000,              // 100 €
+  addon_artist_mix_master: 12000,       // 120 €
+
+  addon_sync_stems: 2000,               // 20 €
+  addon_sync_all_tracks: 5000,          // 50 €
+  addon_sync_arrangement: 7000,         // 70 €
+  addon_sync_structure: 7000,           // 70 €
+  addon_sync_instrument: 4000           // 40 €
 };
 
 app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
@@ -32,6 +49,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
       console.log("Client:", session.customer_details?.email || session.customer_email);
       console.log("Track:", session.metadata?.track_title);
       console.log("License:", session.metadata?.license_type);
+      console.log("Total:", session.amount_total);
     }
 
     res.json({ received: true });
@@ -66,6 +84,9 @@ app.post("/api/create-contract", async (req, res) => {
       profile: data.profile,
       licenseType,
       templateId,
+      basePrice: formatPrice(basePrice(data)),
+      addons: addonsLabel(data),
+      total: priceLabel(data),
       fields: fields.map(f => f.name)
     });
 
@@ -98,7 +119,6 @@ app.post("/api/create-contract", async (req, res) => {
       }
     );
 
-    console.log("FINAL TEMPLATE SENT =", Number(templateId));
     console.log("✅ DocuSeal response:", response.data);
 
     const submitter = Array.isArray(response.data)
@@ -120,7 +140,10 @@ app.post("/api/create-contract", async (req, res) => {
 
     res.json({
       ok: true,
-      signing_url: signingUrl
+      signing_url: signingUrl,
+      base_price: formatPrice(basePrice(data)),
+      addons: addonsLabel(data),
+      total_price: priceLabel(data)
     });
 
   } catch (err) {
@@ -136,8 +159,7 @@ app.post("/api/create-payment", async (req, res) => {
   try {
     const data = req.body;
 
-    const licenseKey = getLicenseKey(data);
-    const unitAmount = CONTRACT_PRICES[licenseKey] || 4900;
+    const unitAmount = totalPriceCents(data);
     const licenseType = getLicenseType(data);
 
     const session = await stripe.checkout.sessions.create({
@@ -150,7 +172,7 @@ app.post("/api/create-payment", async (req, res) => {
             currency: "eur",
             product_data: {
               name: `CB Production License - ${data.track_title}`,
-              description: licenseType
+              description: `${licenseType} · ${addonsLabel(data)}`
             },
             unit_amount: unitAmount
           },
@@ -162,7 +184,10 @@ app.post("/api/create-payment", async (req, res) => {
         track_title: data.track_title || "",
         profile: data.profile || "",
         license_type: licenseType,
-        section: data.section || "Titre complet"
+        section: data.section || "Titre complet",
+        base_price: formatPrice(basePrice(data)),
+        addons: addonsLabel(data),
+        total_price: priceLabel(data)
       },
       success_url: process.env.SUCCESS_URL,
       cancel_url: process.env.CANCEL_URL
@@ -170,7 +195,8 @@ app.post("/api/create-payment", async (req, res) => {
 
     res.json({
       ok: true,
-      checkout_url: session.url
+      checkout_url: session.url,
+      total_price: priceLabel(data)
     });
 
   } catch (err) {
@@ -203,9 +229,71 @@ function getTemplateId(data) {
   return process.env.DOCUSEAL_TEMPLATE_SYNC;
 }
 
-function priceLabel(data) {
-  const cents = CONTRACT_PRICES[getLicenseKey(data)] || 4900;
+function formatPrice(cents) {
   return `${(cents / 100).toFixed(2)} €`;
+}
+
+function basePrice(data) {
+  return CONTRACT_PRICES[getLicenseKey(data)] || 4900;
+}
+
+function normalizeAddons(data) {
+  if (Array.isArray(data.addons)) return data.addons;
+  if (typeof data.addons === "string" && data.addons.trim()) return [data.addons];
+  return [];
+}
+
+function isValidAddon(addon) {
+  return Object.prototype.hasOwnProperty.call(ADDON_PRICES, addon);
+}
+
+function selectedAddons(data) {
+  return normalizeAddons(data).filter(isValidAddon);
+}
+
+function addonsTotal(data) {
+  return selectedAddons(data).reduce((total, addon) => {
+    return total + ADDON_PRICES[addon];
+  }, 0);
+}
+
+function totalPriceCents(data) {
+  return basePrice(data) + addonsTotal(data);
+}
+
+function addonLabel(addon) {
+  const labels = {
+    addon_copyright_transfer: "Cession optionnelle de droits d’auteur",
+
+    addon_artist_stems: "Stems artiste",
+    addon_artist_all_tracks: "Toutes les pistes artiste",
+    addon_artist_protools_session: "Session Pro Tools",
+    addon_artist_master: "Mastering",
+    addon_artist_mix: "Mixage CB Production",
+    addon_artist_mix_master: "Mixage + mastering",
+
+    addon_sync_stems: "Stems sync",
+    addon_sync_all_tracks: "Toutes les pistes sync",
+    addon_sync_arrangement: "Changement d’arrangement",
+    addon_sync_structure: "Changement de structure",
+    addon_sync_instrument: "Ajout / suppression d’un instrument ou élément"
+  };
+
+  return labels[addon] || addon;
+}
+
+function addonsLabel(data) {
+  const addons = selectedAddons(data);
+
+  if (!addons.length) return "-";
+
+  return addons
+    .map(addon => `${addonLabel(addon)} : ${formatPrice(ADDON_PRICES[addon])}`)
+    .join(" | ");
+}
+
+function priceLabel(data) {
+  return formatPrice(totalPriceCents(data));
 }
 
 function commonFields(data, licenseType) {
@@ -229,8 +317,8 @@ function commonFields(data, licenseType) {
     { name: "files_provided", default_value: data.filesProvided || "Master WAV / MP3", readonly: true },
 
     { name: "license_type", default_value: licenseType, readonly: true },
-    { name: "base_price", default_value: data.basePrice || "-", readonly: true },
-    { name: "addons", default_value: data.addons || "-", readonly: true },
+    { name: "base_price", default_value: formatPrice(basePrice(data)), readonly: true },
+    { name: "addons", default_value: addonsLabel(data), readonly: true },
     { name: "total_price", default_value: priceLabel(data), readonly: true }
   ];
 }
@@ -246,6 +334,15 @@ function syncFields(data) {
     { name: "territory", default_value: data.territory || "-", readonly: true },
     { name: "supports", default_value: data.supports || "-", readonly: true },
     { name: "media_budget", default_value: data.mediaBudget || "-", readonly: true },
+
+    { name: "sync_start_time", default_value: data.startTime || "-", readonly: true },
+    { name: "sync_end_time", default_value: data.endTime || "-", readonly: true },
+    {
+      name: "sync_selected_duration",
+      default_value: `${data.startTime || "-"} → ${data.endTime || "-"}`,
+      readonly: true
+    },
+
     { name: "notes", default_value: data.notes || "-", readonly: true }
   ];
 }
@@ -259,6 +356,14 @@ function artistFields(data) {
     { name: "artist_platforms", default_value: data.platforms || "Spotify, Apple Music, Deezer, YouTube Music", readonly: true },
     { name: "artist_territory", default_value: data.territory || "Monde entier", readonly: true },
     { name: "artist_distributor", default_value: data.distributor || "-", readonly: true },
+
+    {
+      name: "protools_warning",
+      default_value:
+        "CB Production ne garantit pas l’ouverture correcte de la session Pro Tools en cas d’absence de plugins, version incompatible, routing spécifique ou configuration différente.",
+      readonly: true
+    },
+
     { name: "notes", default_value: data.notes || "-", readonly: true }
   ];
 }

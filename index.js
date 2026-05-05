@@ -321,7 +321,6 @@ function commonFields(data, licenseType) {
     { name: "track_section", default_value: data.section || "Titre complet", readonly: true },
     { name: "files_provided", default_value: data.filesProvided || "Master WAV / MP3", readonly: true },
 
-    { name: "license_type", default_value: licenseType, readonly: true },
     { name: "base_price", default_value: formatPrice(basePrice(data)), readonly: true },
     { name: "addons", default_value: addonsLabel(data), readonly: true },
     { name: "total_price", default_value: priceLabel(data), readonly: true }

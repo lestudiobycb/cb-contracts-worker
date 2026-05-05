@@ -16,33 +16,29 @@ const CONTRACT_PRICES = {
   artist_exclusive: 14900
 };
 
-/* Stripe webhook AVANT express.json() */
 app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
   const sig = req.headers["stripe-signature"];
 
-  let event;
-
   try {
-    event = stripe.webhooks.constructEvent(
+    const event = stripe.webhooks.constructEvent(
       req.body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      console.log("💰 Paiement reçu !");
+      console.log("Client:", session.customer_details?.email || session.customer_email);
+      console.log("Track:", session.metadata?.track_title);
+      console.log("License:", session.metadata?.license_type);
+    }
+
+    res.json({ received: true });
   } catch (err) {
     console.log("❌ Stripe webhook error:", err.message);
-    return res.status(400).send("Webhook Error");
+    res.status(400).send("Webhook Error");
   }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-
-    console.log("💰 Paiement reçu !");
-    console.log("Client:", session.customer_details?.email || session.customer_email);
-    console.log("Track:", session.metadata?.track_title);
-    console.log("License:", session.metadata?.license_type);
-  }
-
-  res.json({ received: true });
 });
 
 app.use(cors());
@@ -62,12 +58,15 @@ app.post("/api/create-contract", async (req, res) => {
 
     const licenseType = getLicenseType(data);
     const templateId = getTemplateId(data);
+    const fields = buildDocuSealFields(data, licenseType);
 
     console.log("📝 Création contrat :", {
       email: data.email,
       track: data.track_title,
+      profile: data.profile,
       licenseType,
-      templateId
+      templateId,
+      fields: fields.map(f => f.name)
     });
 
     if (!templateId || Number.isNaN(Number(templateId))) {
@@ -87,39 +86,7 @@ app.post("/api/create-contract", async (req, res) => {
             email: data.email,
             name: data.name,
             role: "Première partie",
-            fields: [
-  { name: "client_name", default_value: data.name, readonly: true },
-
-  { name: "client_company", default_value: data.company || "-", readonly: true },
-  { name: "client_legal_form", default_value: data.legalForm || "-", readonly: true },
-  { name: "client_registration", default_value: data.registration || "-", readonly: true },
-  { name: "client_address", default_value: data.address || "-", readonly: true },
-  { name: "client_representative", default_value: data.representative || data.name || "-", readonly: true },
-
-  { name: "track_title", default_value: data.track_title || "-", readonly: true },
-  { name: "track_composers", default_value: data.composers || "CB Production", readonly: true },
-  { name: "track_authors", default_value: data.authors || "-", readonly: true },
-  { name: "track_duration", default_value: data.trackDuration || "-", readonly: true },
-  { name: "track_bpm", default_value: data.bpm || "-", readonly: true },
-  { name: "track_isrc", default_value: data.isrc || "-", readonly: true },
-  { name: "track_iswc", default_value: data.iswc || "-", readonly: true },
-  { name: "track_version", default_value: data.section || "Titre complet", readonly: true },
-
-  { name: "project_name", default_value: data.project || "-", readonly: true },
-  { name: "project_type", default_value: data.usage || "-", readonly: true },
-  { name: "final_client", default_value: data.finalClient || "-", readonly: true },
-  { name: "production_company", default_value: data.productionCompany || "-", readonly: true },
-  { name: "project_duration", default_value: data.projectDuration || "-", readonly: true },
-  { name: "release_date", default_value: data.releaseDate || "-", readonly: true },
-  { name: "territory", default_value: data.territory || "Monde", readonly: true },
-  { name: "supports", default_value: data.supports || "-", readonly: true },
-  { name: "media_budget", default_value: data.mediaBudget || "-", readonly: true },
-
-  { name: "license_type", default_value: licenseType, readonly: true },
-  { name: "license_duration", default_value: data.licenseDuration || "Illimitée sauf mention contraire", readonly: true },
-  { name: "files_provided", default_value: data.filesProvided || "Master WAV/MP3", readonly: true },
-  { name: "price", default_value: priceLabel(data), readonly: true }
-]
+            fields
           }
         ]
       },
@@ -135,14 +102,14 @@ app.post("/api/create-contract", async (req, res) => {
     console.log("✅ DocuSeal response:", response.data);
 
     const submitter = Array.isArray(response.data)
-  ? response.data[0]
-  : response.data.submitters?.[0];
+      ? response.data[0]
+      : response.data.submitters?.[0];
 
-const signingUrl =
-  submitter?.url ||
-  submitter?.embed_src ||
-  submitter?.link ||
-  response.data?.url;
+    const signingUrl =
+      submitter?.url ||
+      submitter?.embed_src ||
+      submitter?.link ||
+      response.data?.url;
 
     if (!signingUrl) {
       return res.status(500).json({
@@ -239,6 +206,71 @@ function getTemplateId(data) {
 function priceLabel(data) {
   const cents = CONTRACT_PRICES[getLicenseKey(data)] || 4900;
   return `${(cents / 100).toFixed(2)} €`;
+}
+
+function commonFields(data, licenseType) {
+  return [
+    { name: "client_company", default_value: data.company || "-", readonly: true },
+    { name: "client_legal_form", default_value: data.legalForm || "-", readonly: true },
+    { name: "client_registration", default_value: data.registration || "-", readonly: true },
+    { name: "client_address", default_value: data.address || "-", readonly: true },
+    { name: "client_representative", default_value: data.representative || data.name || "-", readonly: true },
+    { name: "client_email", default_value: data.email || "-", readonly: true },
+
+    { name: "track_title", default_value: data.track_title || "-", readonly: true },
+    { name: "track_composers", default_value: data.composers || "CB Production", readonly: true },
+    { name: "track_authors", default_value: data.authors || "-", readonly: true },
+    { name: "track_duration", default_value: data.trackDuration || "-", readonly: true },
+    { name: "track_bpm", default_value: data.bpm || "-", readonly: true },
+    { name: "track_isrc", default_value: data.isrc || "-", readonly: true },
+    { name: "track_iswc", default_value: data.iswc || "-", readonly: true },
+    { name: "track_version", default_value: data.trackVersion || data.section || "-", readonly: true },
+    { name: "track_section", default_value: data.section || "Titre complet", readonly: true },
+    { name: "files_provided", default_value: data.filesProvided || "Master WAV / MP3", readonly: true },
+
+    { name: "license_type", default_value: licenseType, readonly: true },
+    { name: "base_price", default_value: data.basePrice || "-", readonly: true },
+    { name: "addons", default_value: data.addons || "-", readonly: true },
+    { name: "total_price", default_value: priceLabel(data), readonly: true }
+  ];
+}
+
+function syncFields(data) {
+  return [
+    { name: "project_name", default_value: data.project || "-", readonly: true },
+    { name: "project_type", default_value: data.usage || "-", readonly: true },
+    { name: "final_client", default_value: data.finalClient || "-", readonly: true },
+    { name: "production_company", default_value: data.productionCompany || "-", readonly: true },
+    { name: "project_duration", default_value: data.projectDuration || "-", readonly: true },
+    { name: "release_date", default_value: data.releaseDate || "-", readonly: true },
+    { name: "territory", default_value: data.territory || "-", readonly: true },
+    { name: "supports", default_value: data.supports || "-", readonly: true },
+    { name: "media_budget", default_value: data.mediaBudget || "-", readonly: true },
+    { name: "notes", default_value: data.notes || "-", readonly: true }
+  ];
+}
+
+function artistFields(data) {
+  return [
+    { name: "project_name", default_value: data.project || "-", readonly: true },
+    { name: "artist_name", default_value: data.artistName || data.company || data.name || "-", readonly: true },
+    { name: "artist_project_type", default_value: data.usage || "Artist release", readonly: true },
+    { name: "artist_release_date", default_value: data.releaseDate || "-", readonly: true },
+    { name: "artist_platforms", default_value: data.platforms || "Spotify, Apple Music, Deezer, YouTube Music", readonly: true },
+    { name: "artist_territory", default_value: data.territory || "Monde entier", readonly: true },
+    { name: "artist_distributor", default_value: data.distributor || "-", readonly: true },
+    { name: "notes", default_value: data.notes || "-", readonly: true }
+  ];
+}
+
+function buildDocuSealFields(data, licenseType) {
+  const fields = commonFields(data, licenseType);
+
+  if (data.profile === "artist") {
+    return fields.concat(artistFields(data));
+  }
+
+  return fields.concat(syncFields(data));
 }
 
 app.listen(PORT, () => {

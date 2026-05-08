@@ -98,7 +98,7 @@ app.post("/api/create-contract", async (req, res) => {
     }
 
 const redirectUrl =
-  `https://cb-prod.com/payment.html` +
+  `https://cb-prod.com/payment` +
   `?email=${encodeURIComponent(data.email || "")}` +
   `&track=${encodeURIComponent(data.track_title || "")}` +
   `&profile=${encodeURIComponent(data.profile || "")}` +

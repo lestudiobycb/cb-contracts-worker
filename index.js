@@ -97,13 +97,21 @@ app.post("/api/create-contract", async (req, res) => {
       });
     }
 
+const redirectUrl =
+  `https://cb-prod.com/payment.html` +
+  `?email=${encodeURIComponent(data.email || "")}` +
+  `&track=${encodeURIComponent(data.track_title || "")}` +
+  `&profile=${encodeURIComponent(data.profile || "")}` +
+  `&license=${encodeURIComponent(data.licenseMode || "")}` +
+  `&addons=${encodeURIComponent((data.addons || []).join(","))}`;
+
     const response = await axios.post(
       `${DOCUSEAL_BASE_URL}/api/submissions`,
       {
-        template_id: parseInt(templateId, 10),
-        send_email: false,
-        redirect_url: "https://cb-prod.com/payment.html",
-        submitters: [
+  template_id: parseInt(templateId, 10),
+  send_email: false,
+  redirect_url: redirectUrl,
+  submitters: [
   {
     email: data.email,
     name: data.name,

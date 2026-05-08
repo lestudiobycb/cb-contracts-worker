@@ -102,6 +102,7 @@ app.post("/api/create-contract", async (req, res) => {
       {
         template_id: parseInt(templateId, 10),
         send_email: false,
+        redirect_url: "https://cb-prod.com/payment.html",
         submitters: [
   {
     email: data.email,

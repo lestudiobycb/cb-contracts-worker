@@ -8,7 +8,8 @@ const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PORT = process.env.PORT || 3001;
-const DOCUSEAL_BASE_URL = process.env.DOCUSEAL_BASE_URL || "http://104.168.10.250:3000";
+const DOCUSEAL_BASE_URL =
+  process.env.DOCUSEAL_BASE_URL || "http://104.168.10.250:3000";
 
 const CONTRACT_PRICES = {
   sync_nonexclusive: 4900,   // 49 €
@@ -33,6 +34,7 @@ const ADDON_PRICES = {
   addon_sync_instrument: 4000           // 40 €
 };
 
+/* Stripe webhook AVANT express.json() */
 app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
   const sig = req.headers["stripe-signature"];
 
@@ -66,6 +68,7 @@ app.get("/", (req, res) => {
   res.send("CB Contracts Worker is running.");
 });
 
+/* Création contrat DocuSeal */
 app.post("/api/create-contract", async (req, res) => {
   try {
     const data = req.body;
@@ -78,6 +81,14 @@ app.post("/api/create-contract", async (req, res) => {
     const templateId = getTemplateId(data);
     const fields = buildDocuSealFields(data, licenseType);
 
+    const redirectUrl =
+      `https://cb-contracts-worker.onrender.com/api/pay-after-signature` +
+      `?email=${encodeURIComponent(data.email || "")}` +
+      `&track=${encodeURIComponent(data.track_title || "")}` +
+      `&profile=${encodeURIComponent(data.profile || "")}` +
+      `&license=${encodeURIComponent(data.licenseMode || "")}` +
+      `&addons=${encodeURIComponent((data.addons || []).join(","))}`;
+
     console.log("📝 Création contrat :", {
       email: data.email,
       track: data.track_title,
@@ -87,6 +98,7 @@ app.post("/api/create-contract", async (req, res) => {
       basePrice: formatPrice(basePrice(data)),
       addons: addonsLabel(data),
       total: priceLabel(data),
+      redirectUrl,
       fields: fields.map(f => f.name)
     });
 
@@ -97,33 +109,28 @@ app.post("/api/create-contract", async (req, res) => {
       });
     }
 
-const redirectUrl =
-  `https://cb-prod.com/payment` +
-  `?email=${encodeURIComponent(data.email || "")}` +
-  `&track=${encodeURIComponent(data.track_title || "")}` +
-  `&profile=${encodeURIComponent(data.profile || "")}` +
-  `&license=${encodeURIComponent(data.licenseMode || "")}` +
-  `&addons=${encodeURIComponent((data.addons || []).join(","))}`;
-
     const response = await axios.post(
       `${DOCUSEAL_BASE_URL}/api/submissions`,
       {
-  template_id: parseInt(templateId, 10),
-  send_email: false,
-  redirect_url: redirectUrl,
-  submitters: [
-  {
-    email: data.email,
-    name: data.name,
-    role: "Licencié",
-    fields
-  },
-  {
-    email: process.env.CB_EMAIL,
-    name: "CB Production",
-    role: "Concédant"
-  }
-]
+        template_id: parseInt(templateId, 10),
+        send_email: false,
+
+        // IMPORTANT : redirection après signature terminée
+        completed_redirect_url: redirectUrl,
+
+        submitters: [
+          {
+            email: data.email,
+            name: data.name,
+            role: "Licencié",
+            fields
+          },
+          {
+            email: process.env.CB_EMAIL || "lestudiobycb@gmail.com",
+            name: "CB Production",
+            role: "Concédant"
+          }
+        ]
       },
       {
         headers: {
@@ -169,6 +176,70 @@ const redirectUrl =
   }
 });
 
+/* Paiement direct après signature DocuSeal */
+app.get("/api/pay-after-signature", async (req, res) => {
+  try {
+    const data = {
+      email: req.query.email || "",
+      track_title: req.query.track || "CB Production License",
+      profile: req.query.profile || "sync",
+      licenseMode: req.query.license || "nonexclusive",
+      addons: req.query.addons
+        ? String(req.query.addons).split(",").filter(Boolean)
+        : []
+    };
+
+    const unitAmount = totalPriceCents(data);
+    const licenseType = getLicenseType(data);
+
+    console.log("💳 Création paiement après signature :", {
+      email: data.email,
+      track: data.track_title,
+      profile: data.profile,
+      licenseType,
+      addons: addonsLabel(data),
+      total: formatPrice(unitAmount)
+    });
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "payment",
+      customer_email: data.email || undefined,
+      line_items: [
+        {
+          price_data: {
+            currency: "eur",
+            product_data: {
+              name: `CB Production License - ${data.track_title}`,
+              description: `${licenseType} · ${addonsLabel(data)}`
+            },
+            unit_amount: unitAmount
+          },
+          quantity: 1
+        }
+      ],
+      metadata: {
+        email: data.email || "",
+        track_title: data.track_title || "",
+        profile: data.profile || "",
+        license_type: licenseType,
+        license_mode: data.licenseMode || "",
+        addons: addonsLabel(data),
+        total_price: formatPrice(unitAmount)
+      },
+      success_url: process.env.SUCCESS_URL,
+      cancel_url: process.env.CANCEL_URL
+    });
+
+    return res.redirect(session.url);
+
+  } catch (err) {
+    console.error("❌ Pay after signature error:", err.message);
+    return res.status(500).send("Payment creation failed");
+  }
+});
+
+/* Création paiement manuelle si besoin */
 app.post("/api/create-payment", async (req, res) => {
   try {
     const data = req.body;
@@ -179,7 +250,7 @@ app.post("/api/create-payment", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
-      customer_email: data.email,
+      customer_email: data.email || undefined,
       line_items: [
         {
           price_data: {
@@ -223,7 +294,9 @@ app.post("/api/create-payment", async (req, res) => {
 
 function getLicenseKey(data) {
   if (data.profile === "artist") return "artist_exclusive";
-  if (data.profile === "sync" && data.licenseMode === "exclusive") return "sync_exclusive";
+  if (data.profile === "sync" && data.licenseMode === "exclusive") {
+    return "sync_exclusive";
+  }
   return "sync_nonexclusive";
 }
 
@@ -253,7 +326,11 @@ function basePrice(data) {
 
 function normalizeAddons(data) {
   if (Array.isArray(data.addons)) return data.addons;
-  if (typeof data.addons === "string" && data.addons.trim()) return [data.addons];
+
+  if (typeof data.addons === "string" && data.addons.trim()) {
+    return data.addons.split(",").map(a => a.trim()).filter(Boolean);
+  }
+
   return [];
 }
 
@@ -345,9 +422,11 @@ function syncFields(data) {
     { name: "project_duration", default_value: data.projectDuration || "-", readonly: true },
     { name: "release_date", default_value: data.releaseDate || "-", readonly: true },
     { name: "license_duration", default_value: data.duration || "1 an", readonly: true },
-    { name: "license_mode", default_value: data.licenseMode === "exclusive"
-        ? "Exclusive"
-        : "Non-exclusive", readonly: true },
+    {
+      name: "license_mode",
+      default_value: data.licenseMode === "exclusive" ? "Exclusive" : "Non-exclusive",
+      readonly: true
+    },
     { name: "territory", default_value: data.territory || "-", readonly: true },
     { name: "supports", default_value: data.supports || "-", readonly: true },
     { name: "media_budget", default_value: data.mediaBudget || "-", readonly: true },

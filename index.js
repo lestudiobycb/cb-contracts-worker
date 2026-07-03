@@ -2,6 +2,7 @@ const express = require("express");
 const Stripe = require("stripe");
 const axios = require("axios");
 const cors = require("cors");
+const crypto = require("crypto");
 require("dotenv").config();
 
 const app = express();
@@ -67,6 +68,140 @@ app.use(express.json());
 app.get("/", (req, res) => {
   res.send("CB Contracts Worker is running.");
 });
+
+/* CB DOCUSEAL BRIDGE V30.9 · START */
+function bridgeTokenIsValid(req) {
+  const expected = String(process.env.DOCUSEAL_API_KEY || "");
+  const received = String(req.get("X-CB-Bridge-Token") || "");
+  if (!expected || !received) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(received);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function bridgeDenied(res) {
+  return res.status(404).json({ error: "not_found" });
+}
+
+function bridgeTemplateIds(payload) {
+  const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload) ? payload : [];
+  return list.map((item) => Number(item?.id)).filter(Number.isFinite);
+}
+
+app.get("/api/docuseal-bridge/health", async (req, res) => {
+  if (!bridgeTokenIsValid(req)) return bridgeDenied(res);
+  try {
+    const response = await axios.get(`${DOCUSEAL_BASE_URL}/api/templates`, {
+      headers: { "X-Auth-Token": process.env.DOCUSEAL_API_KEY },
+      timeout: 30000
+    });
+    return res.json({ ok: true, service: "cb-docuseal-bridge", templates: bridgeTemplateIds(response.data) });
+  } catch (error) {
+    console.error("DOCUSEAL_BRIDGE_HEALTH_FAILED", error.response?.data || error.message);
+    return res.status(502).json({
+      ok: false,
+      error: "docuseal_unreachable",
+      status: error.response?.status || 0,
+      details: error.response?.data || error.message
+    });
+  }
+});
+
+app.post("/api/docuseal-bridge", async (req, res) => {
+  if (!bridgeTokenIsValid(req)) return bridgeDenied(res);
+
+  try {
+    const body = req.body || {};
+    const profile = body.profile === "artist" ? "artist" : "sync";
+    const templateId = profile === "artist"
+      ? process.env.DOCUSEAL_TEMPLATE_ARTIST
+      : process.env.DOCUSEAL_TEMPLATE_SYNC;
+    const customer = body.customer || {};
+    const fields = Array.isArray(body.fields) ? body.fields : [];
+    const completedRedirectUrl = String(body.completed_redirect_url || "").trim();
+
+    if (!templateId || Number.isNaN(Number(templateId))) {
+      return res.status(503).json({ error: "invalid_docuseal_template" });
+    }
+    if (!customer.email || !customer.name || !completedRedirectUrl) {
+      return res.status(400).json({ error: "missing_bridge_fields" });
+    }
+    if (!/^https:\/\//i.test(completedRedirectUrl)) {
+      return res.status(400).json({ error: "invalid_completed_redirect_url" });
+    }
+
+    const safeFields = fields
+      .filter((field) => field && typeof field.name === "string" && field.name.trim())
+      .map((field) => ({
+        name: String(field.name).trim(),
+        default_value: String(field.default_value ?? "-") || "-",
+        readonly: field.readonly !== false
+      }));
+
+    const docusealPayload = {
+      template_id: Number(templateId),
+      send_email: false,
+      completed_redirect_url: completedRedirectUrl,
+      submitters: [
+        {
+          email: String(customer.email).trim(),
+          name: String(customer.name).trim(),
+          role: "Licencié",
+          fields: safeFields
+        },
+        {
+          email: String(process.env.CB_EMAIL || "lestudiobycb@gmail.com").trim(),
+          name: "CB Production",
+          role: "Concédant"
+        }
+      ]
+    };
+
+    const response = await axios.post(
+      `${DOCUSEAL_BASE_URL}/api/submissions`,
+      docusealPayload,
+      {
+        headers: {
+          "X-Auth-Token": process.env.DOCUSEAL_API_KEY,
+          "Content-Type": "application/json"
+        },
+        timeout: 45000
+      }
+    );
+
+    const data = response.data;
+    const submitters = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.submitters) ? data.submitters : [data];
+    const licensee = submitters.find((item) => String(item?.role || "") === "Licencié") || submitters[0];
+    const signingUrl = licensee?.url || licensee?.embed_src || licensee?.link || data?.url;
+    const submissionId = String(
+      licensee?.submission_id || licensee?.submission?.id || data?.submission_id || data?.id || ""
+    );
+
+    if (!signingUrl) {
+      console.error("DOCUSEAL_BRIDGE_NO_SIGNING_URL", data);
+      return res.status(502).json({ error: "no_signing_url" });
+    }
+
+    return res.json({
+      ok: true,
+      signing_url: signingUrl,
+      submission_id: submissionId,
+      template_id: Number(templateId)
+    });
+  } catch (error) {
+    const details = error.response?.data || error.message;
+    console.error("DOCUSEAL_BRIDGE_CREATE_FAILED", details);
+    return res.status(502).json({
+      ok: false,
+      error: "docuseal_submission_failed",
+      status: error.response?.status || 0,
+      details
+    });
+  }
+});
+/* CB DOCUSEAL BRIDGE V30.9 · END */
 
 /* Création contrat DocuSeal */
 app.post("/api/create-contract", async (req, res) => {

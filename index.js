@@ -152,7 +152,9 @@ app.post("/api/docuseal-bridge", async (req, res) => {
         {
           email: String(process.env.CB_EMAIL || "lestudiobycb@gmail.com").trim(),
           name: "CB Production",
-          role: "Concédant"
+          role: "Concédant",
+          completed: true,
+          send_email: false
         }
       ]
     };
@@ -201,7 +203,128 @@ app.post("/api/docuseal-bridge", async (req, res) => {
     });
   }
 });
-/* CB DOCUSEAL BRIDGE V30.9 · END */
+
+function bridgeSubmitters(payload) {
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.submitters)) return payload.submitters;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
+function submitterCompleted(item) {
+  return Boolean(item?.completed_at || item?.completedAt || item?.completed === true);
+}
+
+app.post("/api/docuseal-bridge/submissions/:submissionId/reconcile", async (req, res) => {
+  if (!bridgeTokenIsValid(req)) return bridgeDenied(res);
+  const submissionId = String(req.params.submissionId || "").trim();
+  if (!/^\d+$/.test(submissionId)) return res.status(400).json({ error: "invalid_submission_id" });
+
+  try {
+    const listResponse = await axios.get(`${DOCUSEAL_BASE_URL}/api/submitters`, {
+      params: { submission_id: submissionId, limit: 100 },
+      headers: { "X-Auth-Token": process.env.DOCUSEAL_API_KEY },
+      timeout: 30000
+    });
+    let submitters = bridgeSubmitters(listResponse.data);
+    const licensee = submitters.find((item) => String(item?.role || "").toLowerCase() === "licencié") || submitters[0];
+    let cb = submitters.find((item) => String(item?.role || "").toLowerCase() === "concédant") || submitters[1];
+
+    if (licensee && submitterCompleted(licensee) && cb && !submitterCompleted(cb)) {
+      await axios.put(
+        `${DOCUSEAL_BASE_URL}/api/submitters/${encodeURIComponent(cb.id)}`,
+        { completed: true },
+        {
+          headers: {
+            "X-Auth-Token": process.env.DOCUSEAL_API_KEY,
+            "Content-Type": "application/json"
+          },
+          timeout: 30000
+        }
+      );
+      const refreshed = await axios.get(`${DOCUSEAL_BASE_URL}/api/submitters`, {
+        params: { submission_id: submissionId, limit: 100 },
+        headers: { "X-Auth-Token": process.env.DOCUSEAL_API_KEY },
+        timeout: 30000
+      });
+      submitters = bridgeSubmitters(refreshed.data);
+      cb = submitters.find((item) => String(item?.role || "").toLowerCase() === "concédant") || submitters[1];
+    }
+
+    let submissionCompleted = submitters.length > 0 && submitters.every(submitterCompleted);
+    try {
+      const submissionResponse = await axios.get(`${DOCUSEAL_BASE_URL}/api/submissions/${submissionId}`, {
+        headers: { "X-Auth-Token": process.env.DOCUSEAL_API_KEY },
+        timeout: 30000
+      });
+      const status = String(submissionResponse.data?.status || "").toLowerCase();
+      submissionCompleted = submissionCompleted || status === "completed";
+    } catch (_) {}
+
+    const currentLicensee = submitters.find((item) => String(item?.role || "").toLowerCase() === "licencié") || submitters[0];
+    return res.json({
+      ok: true,
+      submission_id: submissionId,
+      licensee_completed: submitterCompleted(currentLicensee),
+      cb_completed: submitterCompleted(cb),
+      submission_completed: submissionCompleted
+    });
+  } catch (error) {
+    const details = error.response?.data || error.message;
+    console.error("DOCUSEAL_BRIDGE_RECONCILE_FAILED", details);
+    return res.status(502).json({
+      ok: false,
+      error: "docuseal_reconcile_failed",
+      status: error.response?.status || 0,
+      details
+    });
+  }
+});
+
+app.get("/api/docuseal-bridge/submissions/:submissionId/document", async (req, res) => {
+  if (!bridgeTokenIsValid(req)) return bridgeDenied(res);
+  const submissionId = String(req.params.submissionId || "").trim();
+  if (!/^\d+$/.test(submissionId)) return res.status(400).json({ error: "invalid_submission_id" });
+
+  try {
+    const documentsResponse = await axios.get(
+      `${DOCUSEAL_BASE_URL}/api/submissions/${submissionId}/documents`,
+      {
+        params: { merge: true },
+        headers: { "X-Auth-Token": process.env.DOCUSEAL_API_KEY },
+        timeout: 30000
+      }
+    );
+    const documents = Array.isArray(documentsResponse.data?.documents)
+      ? documentsResponse.data.documents
+      : Array.isArray(documentsResponse.data) ? documentsResponse.data : [];
+    const documentUrl = String(documents[0]?.url || "").trim();
+    if (!documentUrl) return res.status(409).json({ error: "signed_document_not_ready" });
+
+    const absoluteUrl = new URL(documentUrl, DOCUSEAL_BASE_URL).toString();
+    const fileResponse = await axios.get(absoluteUrl, {
+      responseType: "arraybuffer",
+      headers: { "X-Auth-Token": process.env.DOCUSEAL_API_KEY },
+      timeout: 45000
+    });
+    res.set({
+      "Content-Type": fileResponse.headers["content-type"] || "application/pdf",
+      "Content-Disposition": `attachment; filename="Contrat-CB-${submissionId}.pdf"`,
+      "Cache-Control": "private, no-store"
+    });
+    return res.send(Buffer.from(fileResponse.data));
+  } catch (error) {
+    const details = error.response?.data || error.message;
+    console.error("DOCUSEAL_BRIDGE_DOCUMENT_FAILED", details);
+    return res.status(error.response?.status === 404 ? 404 : 502).json({
+      ok: false,
+      error: "docuseal_document_failed",
+      status: error.response?.status || 0,
+      details: Buffer.isBuffer(details) ? details.toString("utf8").slice(0, 500) : details
+    });
+  }
+});
+/* CB DOCUSEAL BRIDGE V30.10 · END */
 
 /* Création contrat DocuSeal */
 app.post("/api/create-contract", async (req, res) => {
